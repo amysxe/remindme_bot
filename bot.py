@@ -2,6 +2,7 @@
 import os
 import logging
 import uuid
+import asyncio
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta
 
@@ -33,6 +34,7 @@ application = None  # will be set in main()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+
 # -------- Bot Command Setup ----------
 async def set_bot_commands(app):
     commands = [
@@ -62,7 +64,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
-    task = " ".join(context.args).strip()
+    text = update.message.text
+    task = text[len("/add "):].strip() if text.lower().startswith("/add ") else " ".join(context.args).strip()
+
     if not task:
         await update.message.reply_text(
             "⚠️ Please provide a task. Example: `/add Buy milk`",
@@ -112,6 +116,11 @@ async def delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -------- Remind command with task selection dropdown ----------
+def schedule_reminder(run_time, user_id, task, task_index):
+    # APScheduler is sync, wrap async in create_task
+    scheduler.add_job(lambda: asyncio.create_task(send_reminder(user_id, task, task_index)), 'date', run_date=run_time)
+
+
 async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_tasks = tasks.get(user_id, [])
@@ -164,7 +173,9 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     formatted_time = run_time.strftime("%d %b %Y, %H:%M (UTC+7)")
-    scheduler.add_job(send_reminder, "date", run_date=run_time, args=[user_id, task, task_index])
+    schedule_reminder(run_time, user_id, task, task_index)
+
+    # Immediate feedback
     await update.message.reply_text(
         f"✅ Reminder set for task {task_index + 1}: *__{task}__*\n⏰ At {formatted_time}",
         parse_mode="MarkdownV2"
@@ -261,7 +272,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if action == "snooze":
         minutes = int(data[2])
         run_time = datetime.now(JKT) + timedelta(minutes=minutes)
-        scheduler.add_job(send_reminder, "date", run_date=run_time, args=[user_id, task, task_index])
+        schedule_reminder(run_time, user_id, task, task_index)
         await query.edit_message_text(f"🔔 Okay! I’ll remind you again in {minutes} minutes:\n👉 {task}")
         pending_reminders.pop(uid, None)
         return
