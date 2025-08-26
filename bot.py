@@ -45,6 +45,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📋 /list - Show your tasks\n"
         "⏰ /remind <task_number> in <minutes>\n"
         "⏰ /remind <task_number> at <HH:MM> (UTC+7)\n"
+        "🗑️ /delete <task_number> - Delete a task"
     )
 
 
@@ -56,7 +57,7 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     tasks.setdefault(user_id, []).append(task)
-    await update.message.reply_text(f"✅ Task added: {task}")
+    await update.message.reply_text(f"✅ Task added: *__{task}__*", parse_mode="MarkdownV2")
 
 
 async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -73,6 +74,29 @@ async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text, parse_mode="Markdown")
 
 
+async def delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    user_tasks = tasks.get(user_id, [])
+    if not user_tasks:
+        await update.message.reply_text("🗑️ You don’t have any tasks to delete.")
+        return
+
+    if len(context.args) == 0:
+        await update.message.reply_text("⚠️ Please provide the task number. Example: /delete 2")
+        return
+
+    try:
+        task_index = int(context.args[0]) - 1
+        if task_index < 0 or task_index >= len(user_tasks):
+            await update.message.reply_text("❌ Invalid task number.")
+            return
+
+        deleted_task = user_tasks.pop(task_index)
+        await update.message.reply_text(f"🗑️ Deleted task: *__{deleted_task}__*", parse_mode="MarkdownV2")
+    except ValueError:
+        await update.message.reply_text("⚠️ Please enter a valid task number. Example: /delete 2")
+
+
 async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_tasks = tasks.get(user_id, [])
@@ -87,7 +111,6 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # parse task number
     try:
         task_index = int(context.args[0]) - 1
         task = user_tasks[task_index]
@@ -105,8 +128,7 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
     elif mode == "at":
         try:
-            time_str = context.args[2]
-            hour, minute = map(int, time_str.split(":"))
+            hour, minute = map(int, context.args[2].split(":"))
             now = datetime.now(JKT)
             run_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if run_time <= now:
@@ -118,15 +140,17 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Use `in <minutes>` or `at <HH:MM>`.")
         return
 
-    # schedule job (send_reminder will create its own uid)
+    formatted_time = run_time.strftime("%d %b %Y, %H:%M (UTC+7)")
     scheduler.add_job(send_reminder, "date", run_date=run_time, args=[user_id, task, task_index])
-    await update.message.reply_text(f"⏰ Reminder set for task: {task}\nScheduled at: {run_time.isoformat()}")
+    await update.message.reply_text(
+        f"✅ Reminder set for task {task_index+1}: *__{task}__*\n⏰ At {formatted_time}",
+        parse_mode="MarkdownV2"
+    )
 
 
 # -------- Reminder sender & callbacks ----------
 async def send_reminder(user_id: int, task: str, task_index: int):
-    """This runs inside the event loop (AsyncIOScheduler)."""
-    bot = application.bot  # use the application global
+    bot = application.bot
     try:
         chat = await bot.get_chat(user_id)
         name = getattr(chat, "first_name", None) or getattr(chat, "full_name", None) or getattr(chat, "username", None) or "there"
@@ -138,16 +162,15 @@ async def send_reminder(user_id: int, task: str, task_index: int):
 
     keyboard = [
         [
-            InlineKeyboardButton("✅ Yes", callback_data=f"done_{uid}"),
-            InlineKeyboardButton("❌ No", callback_data=f"notdone_{uid}"),
+            InlineKeyboardButton("✅ Complete", callback_data=f"complete_{uid}"),
+            InlineKeyboardButton("⏰ Later", callback_data=f"later_{uid}")
         ]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-
     await bot.send_message(
         chat_id=user_id,
-        text=f"⏰ Reminder, {name}! You need to do:\n👉 {task}",
-        reply_markup=reply_markup,
+        text=f"⏰ Reminder, *{name}*! You need to do __*{task}*__ now ⏳",
+        parse_mode="MarkdownV2",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
 
@@ -160,48 +183,47 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     info = pending_reminders.get(uid)
     if not info:
-        await query.edit_message_text("⚠️ This reminder is no longer available (maybe expired).")
+        await query.edit_message_text("⚠️ This reminder is no longer available.")
         return
 
     user_id = info["user_id"]
     task = info["task"]
     task_index = info["task_index"]
 
-    # DONE
-    if action == "done":
-        user_tasks = tasks.get(user_id, [])
+    user_tasks = tasks.get(user_id, [])
+
+    # COMPLETE
+    if action == "complete":
         removed = False
-        # try remove by exact value first
         if task in user_tasks:
             user_tasks.remove(task)
             removed = True
-        else:
-            # fallback to index
-            if 0 <= task_index < len(user_tasks):
-                user_tasks.pop(task_index)
-                removed = True
+        elif 0 <= task_index < len(user_tasks):
+            user_tasks.pop(task_index)
+            removed = True
 
         if removed:
-            await query.edit_message_text(f"🎉 Great! Task completed and removed:\n👉 {task}")
+            await query.edit_message_text(f"✅ Task completed and removed: *__{task}__*", parse_mode="MarkdownV2")
         else:
-            await query.edit_message_text("⚠️ Task not found (it may have been removed earlier).")
+            await query.edit_message_text("⚠️ Task not found.")
 
         pending_reminders.pop(uid, None)
         return
 
-    # NOT DONE -> show snooze buttons
-    if action == "notdone":
+    # LATER → show snooze + back
+    if action == "later":
         keyboard = [
             [
                 InlineKeyboardButton("5 min", callback_data=f"snooze_{uid}_5"),
                 InlineKeyboardButton("10 min", callback_data=f"snooze_{uid}_10"),
-                InlineKeyboardButton("30 min", callback_data=f"snooze_{uid}_30"),
-            ]
+                InlineKeyboardButton("30 min", callback_data=f"snooze_{uid}_30")
+            ],
+            [InlineKeyboardButton("⬅ Back", callback_data=f"back_{uid}")]
         ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
         await query.edit_message_text(
-            f"⏳ Noted. When should I remind you again for:\n👉 {task}",
-            reply_markup=reply_markup,
+            f"⏰ How many minutes do you want to be reminded again for *__{task}__*?",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(keyboard)
         )
         return
 
@@ -215,11 +237,24 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         run_time = datetime.now(JKT) + timedelta(minutes=minutes)
-        # schedule a new reminder (this will create a new uid)
         scheduler.add_job(send_reminder, "date", run_date=run_time, args=[user_id, task, task_index])
-
         await query.edit_message_text(f"🔔 Okay! I’ll remind you again in {minutes} minutes:\n👉 {task}")
         pending_reminders.pop(uid, None)
+        return
+
+    # BACK → restore original reminder buttons
+    if action == "back":
+        keyboard = [
+            [
+                InlineKeyboardButton("✅ Complete", callback_data=f"complete_{uid}"),
+                InlineKeyboardButton("⏰ Later", callback_data=f"later_{uid}")
+            ]
+        ]
+        await query.edit_message_text(
+            f"⏰ Reminder, *{query.from_user.first_name}*! You need to do __*{task}*__ now ⏳",
+            parse_mode="MarkdownV2",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
 
 
@@ -228,17 +263,16 @@ def main():
     global application
     application = Application.builder().token(BOT_TOKEN).build()
 
-    # start scheduler only after the app event loop is ready
     async def on_startup(app):
         scheduler.start()
         logger.info("✅ Scheduler started")
 
     application.post_init = on_startup
 
-    # Handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("add", add_task))
     application.add_handler(CommandHandler("list", list_tasks))
+    application.add_handler(CommandHandler("delete", delete_task))
     application.add_handler(CommandHandler("remind", remind))
     application.add_handler(CallbackQueryHandler(button_handler))
 
