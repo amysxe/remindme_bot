@@ -122,9 +122,7 @@ async def delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # -------- Remind command with task selection dropdown ----------
 def schedule_reminder(run_time, user_id, task, task_index):
-    # APScheduler is sync, wrap async in create_task
     scheduler.add_job(lambda: asyncio.create_task(send_reminder(user_id, task, task_index)), 'date', run_date=run_time)
-    # track scheduled task
     scheduled_tasks.setdefault(user_id, set()).add(task_index)
 
 
@@ -135,13 +133,11 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ You don’t have any tasks yet.")
         return
 
-    # If user only types /remind → show inline keyboard to select task
     if len(context.args) == 0:
         keyboard = [[InlineKeyboardButton(f"{i+1}. {t}", callback_data=f"select_{i}")] for i, t in enumerate(user_tasks)]
         await update.message.reply_text("Select a task to set a reminder:", reply_markup=InlineKeyboardMarkup(keyboard))
         return
 
-    # If user types /remind <task_number> in <minutes> or at <HH:MM>
     if len(context.args) < 3:
         await update.message.reply_text(
             "⚠️ Usage:\n/remind <task_number> in <minutes>\n/remind <task_number> at <HH:MM>\n"
@@ -181,8 +177,6 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     formatted_time = run_time.strftime("%d %b %Y, %H:%M (UTC+7)")
     schedule_reminder(run_time, user_id, task, task_index)
-
-    # Immediate feedback
     await update.message.reply_text(
         f"✅ Reminder set for task {task_index + 1}: *__{task}__*\n⏰ At {formatted_time}",
         parse_mode="MarkdownV2"
@@ -222,7 +216,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = data[0]
     uid = data[1]
 
-    # SELECT task from dropdown → show how to set reminder next
     if action == "select":
         task_index = int(uid)
         user_id = query.from_user.id
@@ -257,7 +250,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text("⚠️ Task not found.")
 
-        # Remove from scheduled
         scheduled_tasks.setdefault(user_id, set()).discard(task_index)
         pending_reminders.pop(uid, None)
         return
@@ -302,7 +294,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 # -------- Main ----------
-def main():
+async def main():
     global application
     application = Application.builder().token(BOT_TOKEN).build()
 
@@ -314,14 +306,16 @@ def main():
     application.add_handler(CommandHandler("remind", remind))
     application.add_handler(CallbackQueryHandler(button_handler))
 
-    async def on_startup(app):
-        scheduler.start()
-        await set_bot_commands(app)
-        logger.info("✅ Scheduler started and bot commands set")
+    scheduler.start()
+    await set_bot_commands(application)
+    logger.info("✅ Scheduler started and bot commands set")
 
+    await application.initialize()
+    await application.start()
     logger.info("🚀 Bot is running...")
-    application.run_polling(post_init=on_startup)
+    await application.updater.start_polling()
+    await application.updater.idle()
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
