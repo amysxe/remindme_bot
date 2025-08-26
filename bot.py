@@ -77,7 +77,6 @@ def main():
         raise ValueError("❌ TOKEN not set. Please add it in Railway → Variables")
 
     app = Application.builder().token(BOT_TOKEN).build()
-    scheduler.start()
 
     # Handlers
     app.add_handler(CommandHandler("start", start))
@@ -86,7 +85,13 @@ def main():
     app.add_handler(CommandHandler("remind", remind))
 
     logger.info("🚀 Bot is running...")
+
+    # Start scheduler when app starts
+    async def on_startup(app):
+        scheduler.start()
+        logger.info("✅ Scheduler started")
+
+    app.post_init = on_startup  # hook runs when event loop is alive
+
     app.run_polling()
 
-if __name__ == "__main__":
-    main()
