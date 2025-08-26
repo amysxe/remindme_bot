@@ -12,6 +12,8 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     CallbackQueryHandler,
+    MessageHandler,
+    filters
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
@@ -306,10 +308,12 @@ async def main():
     application.add_handler(CommandHandler("remind", remind))
     application.add_handler(CallbackQueryHandler(button_handler))
 
+    # Start scheduler
     scheduler.start()
     await set_bot_commands(application)
     logger.info("✅ Scheduler started and bot commands set")
 
+    # Initialize & start bot
     await application.initialize()
     await application.start()
     logger.info("🚀 Bot is running...")
