@@ -53,7 +53,10 @@ async def add_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     task = " ".join(context.args).strip()
     if not task:
-        await update.message.reply_text("⚠️ Please provide a task. Example: `/add Buy milk`", parse_mode="Markdown")
+        await update.message.reply_text(
+            "⚠️ Please provide a task. Example: `/add Buy milk`",
+            parse_mode="Markdown"
+        )
         return
 
     tasks.setdefault(user_id, []).append(task)
@@ -104,10 +107,11 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ You don’t have any tasks yet.")
         return
 
-    if len(context.args) < 2:
+    if len(context.args) < 3:
         await update.message.reply_text(
             "⚠️ Usage:\n/remind <task_number> in <minutes>\n/remind <task_number> at <HH:MM>\n"
-            "Example: `/remind 1 in 10` or `/remind 2 at 14:30`"
+            "Example: `/remind 1 in 10` or `/remind 2 at 14:30`",
+            parse_mode="MarkdownV2"
         )
         return
 
@@ -119,17 +123,17 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     mode = context.args[1].lower()
+    now = datetime.now(JKT)
     if mode == "in":
         try:
             minutes = int(context.args[2])
-            run_time = datetime.now(JKT) + timedelta(minutes=minutes)
+            run_time = now + timedelta(minutes=minutes)
         except (IndexError, ValueError):
             await update.message.reply_text("⚠️ Example: `/remind 1 in 10` (10 is minutes).")
             return
     elif mode == "at":
         try:
             hour, minute = map(int, context.args[2].split(":"))
-            now = datetime.now(JKT)
             run_time = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
             if run_time <= now:
                 run_time += timedelta(days=1)
@@ -141,9 +145,13 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     formatted_time = run_time.strftime("%d %b %Y, %H:%M (UTC+7)")
+
+    # Schedule the reminder
     scheduler.add_job(send_reminder, "date", run_date=run_time, args=[user_id, task, task_index])
+
+    # ✅ Send immediate feedback
     await update.message.reply_text(
-        f"✅ Reminder set for task {task_index+1}: *__{task}__*\n⏰ At {formatted_time}",
+        f"✅ Reminder set for task {task_index + 1}: *__{task}__*\n⏰ At {formatted_time}",
         parse_mode="MarkdownV2"
     )
 
