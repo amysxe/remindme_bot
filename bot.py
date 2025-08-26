@@ -297,13 +297,7 @@ def main():
     global application
     application = Application.builder().token(BOT_TOKEN).build()
 
-    async def on_startup(app):
-        scheduler.start()
-        await set_bot_commands(app)
-        logger.info("✅ Scheduler started and bot commands set")
-
-    application.post_init = on_startup
-
+    # handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("add", add_task))
     application.add_handler(CommandHandler("list", list_tasks))
@@ -311,9 +305,14 @@ def main():
     application.add_handler(CommandHandler("remind", remind))
     application.add_handler(CallbackQueryHandler(button_handler))
 
-    logger.info("🚀 Bot is running...")
-    application.run_polling()
+    async def on_startup(app):
+        scheduler.start()
+        await set_bot_commands(app)
+        logger.info("✅ Scheduler started and bot commands set")
 
+    logger.info("🚀 Bot is running...")
+    # pass post_init correctly
+    application.run_polling(post_init=on_startup)
 
 if __name__ == "__main__":
     main()
