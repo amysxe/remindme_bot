@@ -25,6 +25,7 @@ JKT = ZoneInfo("Asia/Jakarta")  # UTC+7
 # in-memory stores
 tasks = {}  # {user_id: [task1, task2, ...]}
 pending_reminders = {}  # {uid: {"user_id":..., "task":..., "task_index":...}}
+scheduled_tasks = {}  # {user_id: set(task_index)} -> tracks tasks with active reminders
 
 # scheduler & application placeholders
 scheduler = AsyncIOScheduler()
@@ -86,8 +87,10 @@ async def list_tasks(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = "📋 *Your Tasks:*\n"
+    user_scheduled = scheduled_tasks.get(user_id, set())
     for i, task in enumerate(user_tasks, start=1):
-        text += f"{i}. {task}\n"
+        reminder_mark = "⏰" if (i-1) in user_scheduled else ""
+        text += f"{i}. {task} {reminder_mark}\n"
 
     await update.message.reply_text(text, parse_mode="Markdown")
 
@@ -110,6 +113,8 @@ async def delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         deleted_task = user_tasks.pop(task_index)
+        # Remove scheduled task if exists
+        scheduled_tasks.setdefault(user_id, set()).discard(task_index)
         await update.message.reply_text(f"🗑️ Deleted task: *__{deleted_task}__*", parse_mode="MarkdownV2")
     except ValueError:
         await update.message.reply_text("⚠️ Please enter a valid task number. Example: /delete 2")
@@ -119,6 +124,8 @@ async def delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def schedule_reminder(run_time, user_id, task, task_index):
     # APScheduler is sync, wrap async in create_task
     scheduler.add_job(lambda: asyncio.create_task(send_reminder(user_id, task, task_index)), 'date', run_date=run_time)
+    # track scheduled task
+    scheduled_tasks.setdefault(user_id, set()).add(task_index)
 
 
 async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -250,6 +257,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await query.edit_message_text("⚠️ Task not found.")
 
+        # Remove from scheduled
+        scheduled_tasks.setdefault(user_id, set()).discard(task_index)
         pending_reminders.pop(uid, None)
         return
 
@@ -311,8 +320,8 @@ def main():
         logger.info("✅ Scheduler started and bot commands set")
 
     logger.info("🚀 Bot is running...")
-    # pass post_init correctly
     application.run_polling(post_init=on_startup)
+
 
 if __name__ == "__main__":
     main()
