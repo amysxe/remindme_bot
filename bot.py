@@ -5,7 +5,7 @@ import uuid
 from zoneinfo import ZoneInfo
 from datetime import datetime, timedelta
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -32,6 +32,17 @@ application = None  # will be set in main()
 # logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# -------- Bot Command Setup ----------
+async def set_bot_commands(app):
+    commands = [
+        BotCommand("start", "Start the bot"),
+        BotCommand("add", "Add a new task"),
+        BotCommand("list", "Show your tasks"),
+        BotCommand("remind", "Set a reminder for a task"),
+        BotCommand("delete", "Delete a task"),
+    ]
+    await app.bot.set_my_commands(commands)
 
 
 # -------- Handlers ----------
@@ -100,6 +111,7 @@ async def delete_task(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Please enter a valid task number. Example: /delete 2")
 
 
+# -------- Remind command with task selection dropdown ----------
 async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     user_tasks = tasks.get(user_id, [])
@@ -107,6 +119,13 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ You don’t have any tasks yet.")
         return
 
+    # If user only types /remind → show inline keyboard to select task
+    if len(context.args) == 0:
+        keyboard = [[InlineKeyboardButton(f"{i+1}. {t}", callback_data=f"select_{i}")] for i, t in enumerate(user_tasks)]
+        await update.message.reply_text("Select a task to set a reminder:", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+
+    # If user types /remind <task_number> in <minutes> or at <HH:MM>
     if len(context.args) < 3:
         await update.message.reply_text(
             "⚠️ Usage:\n/remind <task_number> in <minutes>\n/remind <task_number> at <HH:MM>\n"
@@ -145,11 +164,7 @@ async def remind(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     formatted_time = run_time.strftime("%d %b %Y, %H:%M (UTC+7)")
-
-    # Schedule the reminder
     scheduler.add_job(send_reminder, "date", run_date=run_time, args=[user_id, task, task_index])
-
-    # ✅ Send immediate feedback
     await update.message.reply_text(
         f"✅ Reminder set for task {task_index + 1}: *__{task}__*\n⏰ At {formatted_time}",
         parse_mode="MarkdownV2"
@@ -189,6 +204,17 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     action = data[0]
     uid = data[1]
 
+    # SELECT task from dropdown → show how to set reminder next
+    if action == "select":
+        task_index = int(uid)
+        user_id = query.from_user.id
+        task = tasks[user_id][task_index]
+        await query.edit_message_text(
+            f"Selected task: *__{task}__*\n\nNow use `/remind {task_index+1} in <minutes>` or `/remind {task_index+1} at <HH:MM>` to set a reminder.",
+            parse_mode="MarkdownV2"
+        )
+        return
+
     info = pending_reminders.get(uid)
     if not info:
         await query.edit_message_text("⚠️ This reminder is no longer available.")
@@ -197,10 +223,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = info["user_id"]
     task = info["task"]
     task_index = info["task_index"]
-
     user_tasks = tasks.get(user_id, [])
 
-    # COMPLETE
     if action == "complete":
         removed = False
         if task in user_tasks:
@@ -218,7 +242,6 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pending_reminders.pop(uid, None)
         return
 
-    # LATER → show snooze + back
     if action == "later":
         keyboard = [
             [
@@ -235,22 +258,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    # SNOOZE
     if action == "snooze":
-        try:
-            minutes = int(data[2])
-        except (IndexError, ValueError):
-            await query.edit_message_text("⚠️ Invalid snooze value.")
-            pending_reminders.pop(uid, None)
-            return
-
+        minutes = int(data[2])
         run_time = datetime.now(JKT) + timedelta(minutes=minutes)
         scheduler.add_job(send_reminder, "date", run_date=run_time, args=[user_id, task, task_index])
         await query.edit_message_text(f"🔔 Okay! I’ll remind you again in {minutes} minutes:\n👉 {task}")
         pending_reminders.pop(uid, None)
         return
 
-    # BACK → restore original reminder buttons
     if action == "back":
         keyboard = [
             [
@@ -273,7 +288,8 @@ def main():
 
     async def on_startup(app):
         scheduler.start()
-        logger.info("✅ Scheduler started")
+        await set_bot_commands(app)
+        logger.info("✅ Scheduler started and bot commands set")
 
     application.post_init = on_startup
 
